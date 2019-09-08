@@ -1,0 +1,55 @@
+Index: src/User.elm
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/User.elm	(date 1567315520787)
++++ src/User.elm	(date 1567315520787)
+@@ -80,25 +80,14 @@
+     | Leaf a
+ 
+ 
+-traverseTree : Tree Int -> D.Decoder (Tree a)
+-traverseTree schema =
+-    sequenceTree <|
+-        case schema of
+-            Node schemas ->
+-                Node <| List.map traverseTree schemas
+-
+-            Leaf count ->
+-                Leaf <| D.bytes count
++traverseTree : Tree Int -> D.Decoder (Tree Bytes)
++traverseTree =
++    traverse D.bytes
+ 
+ 
+ sequenceTree : Tree (D.Decoder a) -> D.Decoder (Tree a)
+-sequenceTree tree =
+-    case tree of
+-        Node trees ->
+-            Node >> D.succeed <| List.map sequenceTree trees
+-
+-        Leaf decoder ->
+-            D.map Leaf decoder
++sequenceTree =
++    sequence
+ 
+ 
+ sequence : Tree (D.Decoder a) -> D.Decoder (Tree a)
+@@ -110,10 +99,14 @@
+ traverse f tree =
+     case tree of
+         Node trees ->
+-            Debug.todo ""
++            let
++                listOfDecoders =
++                    List.map (traverse f) trees
++            in
++            D.succeed (Node listOfDecoders)
+ 
+         Leaf value ->
+-            f value |> D.map
++            D.map Leaf <| f value
+ 
+ 
+ 
