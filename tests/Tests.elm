@@ -1,6 +1,7 @@
 module Tests exposing (..)
 
-import Array
+import Array exposing (Array)
+import AvDe
 import Avro exposing (..)
 import Bytes exposing (Bytes)
 import Bytes.Encode as E
@@ -17,8 +18,8 @@ primitiveSchema =
         [ test "Can decode strings" <|
             \_ ->
                 parse """ "string" """
-                    |> Result.map (\schema -> Avro.decode schema <| E.encode (E.sequence [ E.unsignedInt8 10, E.string "Hello" ]))
-                    |> Expect.equal (Ok <| Ok <| Leaf <| Avro.DString "Hello")
+                    |> Result.andThen (\schema -> Avro.decode schema <| E.encode (E.sequence [ E.unsignedInt8 10, E.string "Hello" ]))
+                    |> Expect.equal (Ok <| Leaf <| Avro.DString "Hello")
         ]
 
 
@@ -52,10 +53,10 @@ dataDecoding =
         let
             dataTree =
                 parse userSchemaJson
-                    |> Result.map (\schema -> Avro.decode schema userAvro)
+                    |> Result.andThen (\schema -> Avro.decode schema userAvro)
         in
         \_ ->
-            Expect.equal (Ok <| Ok userData) dataTree
+            Expect.equal (Ok userData) dataTree
 
 
 userSchemaJson =
@@ -384,9 +385,7 @@ fingerprintEncoder =
 userData : Tree Datum
 userData =
     Tree
-        [ ( "age"
-          , Leaf <| DInt 21
-          )
+        [ ( "age", Leaf <| DInt 21 )
         , ( "height", Leaf <| DFloat 5.875 )
         , ( "weight", Leaf <| DFloat 180.5 )
         , ( "active", Leaf <| DBool True )
@@ -439,4 +438,135 @@ userData =
                 , ( "someString", Leaf <| DString "something" )
                 ]
           )
+        ]
+
+
+type alias User =
+    { age : Int
+    , height : Float
+    , weight : Float
+    , active : Bool
+    , balance : Int
+    , preferredTheme : Theme
+    , fullName : FullName
+    , friends : LList FullName
+    , fingerprint : Bytes
+    , technologies : Array String
+    , experience : Dict String ExperienceValue
+    }
+
+
+decoders : Test
+decoders =
+    test "Decode complex type" <|
+        \_ ->
+            AvDe.decode AvDe.value userData
+                |> Result.andThen (AvDe.decode userDecoder)
+                |> Expect.equal (Ok user)
+
+
+user : User
+user =
+    User 21
+        5.875
+        180.5
+        True
+        8204863
+        Dark
+        (FullName "Joanna" "Doe")
+        (LList
+            (FullName "John" "Doe")
+            (LList
+                (FullName "Bob" "Crypto")
+                Empty
+            )
+        )
+        (E.encode fingerprintEncoder)
+        (Array.fromList [ "Elm", "Kotlin" ])
+        (Dict.fromList
+            [ ( "someNumber", EInt 78 )
+            , ( "someName", EFullName <| FullName "Alice" "Crypto" )
+            , ( "someString", EString "something" )
+            ]
+        )
+
+
+type Theme
+    = Light
+    | Dark
+
+
+type alias FullName =
+    { first : String
+    , last : String
+    }
+
+
+type LList a
+    = LList a (LList a)
+    | Empty
+
+
+type ExperienceValue
+    = EString String
+    | EFullName FullName
+    | EInt Int
+
+
+userDecoder : AvDe.Decoder User
+userDecoder =
+    AvDe.succeed User
+        |> AvDe.andThen (\c -> AvDe.map c <| AvDe.field "age" AvDe.int)
+        |> AvDe.andThen (\c -> AvDe.map c <| AvDe.field "height" AvDe.float)
+        |> AvDe.andThen (\c -> AvDe.map c <| AvDe.field "weight" AvDe.float)
+        |> AvDe.andThen (\c -> AvDe.map c <| AvDe.field "active" AvDe.bool)
+        |> AvDe.andThen (\c -> AvDe.map c <| AvDe.field "balance" AvDe.int)
+        |> AvDe.andThen (\c -> AvDe.map c <| AvDe.field "preferredTheme" themeDecoder)
+        |> AvDe.andThen (\c -> AvDe.map c <| AvDe.field "fullName" fullNameDecoder)
+        |> AvDe.andThen (\c -> AvDe.map c <| AvDe.field "friends" <| llistDecoder fullNameDecoder)
+        |> AvDe.andThen (\c -> AvDe.map c <| AvDe.field "fingerprint" <| AvDe.bytes)
+        |> AvDe.andThen (\c -> AvDe.map c <| AvDe.field "technologies" <| AvDe.array AvDe.string)
+        |> AvDe.andThen (\c -> AvDe.map c <| AvDe.field "experience" <| AvDe.dict experienceValueDecoder)
+
+
+themeDecoder : AvDe.Decoder Theme
+themeDecoder =
+    AvDe.string
+        |> AvDe.andThen
+            (\theme ->
+                case theme of
+                    "Light" ->
+                        AvDe.succeed Light
+
+                    "Dark" ->
+                        AvDe.succeed Dark
+
+                    _ ->
+                        AvDe.fail ("Field theme contains an incorrect value " ++ theme)
+            )
+
+
+fullNameDecoder : AvDe.Decoder FullName
+fullNameDecoder =
+    AvDe.map2 FullName
+        (AvDe.field "first" AvDe.string)
+        (AvDe.field "last" AvDe.string)
+
+
+llistDecoder : AvDe.Decoder a -> AvDe.Decoder (LList a)
+llistDecoder decoder =
+    AvDe.oneOf
+        [ AvDe.null Empty
+        , AvDe.map2 LList
+            (AvDe.field "value" decoder)
+            (AvDe.field "next" <| AvDe.lazy <| \() -> llistDecoder decoder)
+        ]
+
+
+experienceValueDecoder : AvDe.Decoder ExperienceValue
+experienceValueDecoder =
+    AvDe.oneOf
+        [ AvDe.map EInt AvDe.int
+        , AvDe.map EString AvDe.string
+        , AvDe.map EFullName fullNameDecoder
         ]
